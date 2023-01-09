@@ -214,8 +214,9 @@ namespace osc {
     loadOBJ(model, "../../assets/front.obj", 10.f, vec3f(0.f,0.f,0.f), vec3f(0.725f, 0.71f, 0.68f));
     loadOBJ(model, "../../assets/short_box.obj", 5.f, vec3f(0.f,0.f,0.f), vec3f(0.725f, 0.71f, 0.68f));
     // loadOBJ(model, "../../assets/tall_box.obj", 1.f);
-    addLight(model, vec3f(4.0f, 8.0f, 4.0f), 0.5f, vec3f(17.0f,12.0f,5.0f));
-    addLight(model, vec3f(-4.0f, 8.0f, -4.0f), 0.5f, vec3f(5.0f,12.0f,17.0f));
+    addLight(model, vec3f(4.0f, 8.0f, 4.0f), 0.5f, vec3f(17.0f,5.0f,5.0f));
+    addLight(model, vec3f(-4.0f, 8.0f, -4.0f), 0.5f, vec3f(5.0f,5.0f,17.0f));
+    addLight(model, vec3f(4.0f, 8.0f, -4.0f), 0.5f, vec3f(5.0f,17.0f,5.0f));
     return model;
   }
 }

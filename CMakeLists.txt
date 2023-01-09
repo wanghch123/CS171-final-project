@@ -78,5 +78,5 @@ set(optix_LIBRARY "")
 
 
 
-add_subdirectory(example07_firstRealModel)
+add_subdirectory(src)
 

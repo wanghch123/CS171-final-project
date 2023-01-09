@@ -59,6 +59,9 @@ namespace osc {
                                  cameraFrame.get_up() });
         cameraFrame.modified = false;
       }
+      else {
+        sample.updateCamera();
+      }
       sample.render();
     }
     
@@ -130,8 +133,8 @@ namespace osc {
   {
     try {
       Model *model = ContructScene("../../models/sponza.obj");
-      Camera camera = { /*from*/vec3f(0.f, 0.f, 1.f),
-                        /* at */model->bounds.center(),
+      Camera camera = { /*from*/vec3f(-5.f, 3.f, 5.f),
+                        /* at */vec3f(0.f, 3.f, 0.f),
                         /* up */vec3f(0.f,1.f,0.f) };
       // something approximating the scale of the world, so the
       // camera knows how much to move for any given user interaction:

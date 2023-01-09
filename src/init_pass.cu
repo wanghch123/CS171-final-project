@@ -132,6 +132,20 @@ namespace osc {
     // return;
   }
 
+  static __device__ vec3f Shade(vec3f lightDir, vec3f surfNorm, vec3f lightNorm, vec3f surfColor, vec3f lightColor, float distance)
+  {
+    vec3f radiance = vec3f(0.0f, 0.0f, 0.0f);
+    if (dot(lightDir, surfNorm) > 0.f && dot(-lightDir, lightNorm) > 0.f) {
+      radiance = surfColor * (float)INV_PI * lightColor * dot(lightDir, surfNorm) * dot(-lightDir, lightNorm) / max(distance * distance, 0.001f);
+    }
+    return radiance;
+  }
+
+  static __device__ float Luminance(const gdt::vec3f &c)
+  {
+    return 0.299f * c.x + 0.597f * c.y + 0.114f * c.z;
+  }
+
   //------------------------------------------------------------------------------
   // closest hit and anyhit programs for radiance-type rays.
   //
@@ -147,6 +161,13 @@ namespace osc {
     const TriangleMeshSBTData &sbtData
       = *(const TriangleMeshSBTData*)optixGetSbtDataPointer();
 
+    const int ix = optixGetLaunchIndex().x;
+    const int iy = optixGetLaunchIndex().y;
+    const uint32_t fbIndex = ix+iy*optixLaunchParams.frame.size.x;
+
+    const auto &restir = optixLaunchParams.restir;
+
+    const uint32_t reservoir_index = fbIndex * restir.config.num_eveluated_samples;
     // compute normal:
     const int   primID = optixGetPrimitiveIndex();
     const vec3i index  = sbtData.index[primID];
@@ -178,67 +199,104 @@ namespace osc {
       +         u * sbtData.vertex[index.y]
       +         v * sbtData.vertex[index.z];
 
-    vec3f pixelColor = vec3f(0.f);
+    optixLaunchParams.frame.posBuffer[fbIndex] = surfPos;
+    optixLaunchParams.frame.normalBuffer[fbIndex] = Ns;
+    optixLaunchParams.frame.diffuseBuffer[fbIndex] = sbtData.color;
+    optixLaunchParams.frame.idBuffer[fbIndex] = sbtData.id;
 
-    if (!sbtData.isEmissive) {
-      const int numLightSamples = NUM_LIGHT_SAMPLES;
-      for (int lightSampleID=0;lightSampleID<numLightSamples;lightSampleID++) {
-        vec3f lightPos;
-        vec3f lightPower;
-        vec3f lightNorm;
-        float sample_pdf;
-        // produce random light sample
-        // const vec3f lightPos
-        //   = optixLaunchParams.light.origin
-        //   + prd.random() * optixLaunchParams.light.du
-        //   + prd.random() * optixLaunchParams.light.dv;
-        // vec3f lightDir = lightPos - surfPos;
-        // float lightDist = gdt::length(lightDir);
-        // lightDir = normalize(lightDir);
-        SampleLight(prd.random, lightPos, lightNorm, lightPower, sample_pdf);
-        vec3f lightDir = lightPos - surfPos;
-        float lightDist = gdt::length(lightDir);
-        lightDir = normalize(lightDir);
-        // trace shadow ray:
-        const float NdotL = dot(lightDir,Ns);
-        const float cosNL = dot(-lightDir, lightNorm);
-        if (NdotL >= 0.f && cosNL >= 0.f) {
-          vec3f lightVisibility = 0.f;
-          // the values we store the PRD pointer in:
-          uint32_t u0, u1;
-          packPointer( &lightVisibility, u0, u1 );
-          optixTrace(optixLaunchParams.traversable,
-                    surfPos + 1e-3f * Ng,
-                    lightDir,
-                    1e-3f,      // tmin
-                    lightDist * (1.f-1e-3f),  // tmax
-                    0.0f,       // rayTime
-                    OptixVisibilityMask( 255 ),
-                    // For shadow rays: skip any/closest hit shaders and terminate on first
-                    // intersection with anything. The miss shader is used to mark if the
-                    // light was visible.
-                    OPTIX_RAY_FLAG_DISABLE_ANYHIT
-                    | OPTIX_RAY_FLAG_TERMINATE_ON_FIRST_HIT
-                    | OPTIX_RAY_FLAG_DISABLE_CLOSESTHIT,
-                    SHADOW_RAY_TYPE,            // SBT offset
-                    RAY_TYPE_COUNT,               // SBT stride
-                    SHADOW_RAY_TYPE,            // missSBTIndex 
-                    u0, u1 );
-          pixelColor
-            += lightVisibility
-            *  sbtData.color
-            *  (float)INV_PI
-            *  lightPower
-            *  NdotL
-            *  dot(lightNorm, -lightDir)
-            *  (1 / (lightDist * lightDist * numLightSamples * sample_pdf));
-        }
-      }
+    if (sbtData.isEmissive) {
+      optixLaunchParams.frame.mask[fbIndex] = false;
+      // printf("Here!!!\n");
+      const int r = int(255.99f*min(sbtData.color.x,1.f));
+      const int g = int(255.99f*min(sbtData.color.y,1.f));
+      const int b = int(255.99f*min(sbtData.color.z,1.f));
+      const uint32_t rgba = 0xff000000 | (r<<0) | (g<<8) | (b<<16);
+      optixLaunchParams.frame.colorBuffer[fbIndex] = rgba;
     }
     else {
-      pixelColor = sbtData.color;
+      optixLaunchParams.frame.mask[fbIndex] = true;
+      int prev_reservoir_index = -1;
+      int prev_fbIndex = -1;
+      if (restir.config.temporal_reuse && restir.prev_reservoirs) {
+        const auto &prev_camera = optixLaunchParams.prev_camera;
+        const vec3f d = normalize(surfPos - prev_camera.position);
+        const float t = dot(prev_camera.direction, prev_camera.direction) / dot(d, prev_camera.direction);
+        const vec3f op = t * d - prev_camera.direction;
+        float prev_u = dot(op, prev_camera.horizontal) / dot(prev_camera.horizontal, prev_camera.horizontal) + 0.5f;
+        float prev_v = dot(op, prev_camera.vertical) / dot(prev_camera.vertical, prev_camera.vertical) + 0.5f;
+        int prev_x = int(prev_u * optixLaunchParams.frame.size.x);
+        int prev_y = int(prev_v * optixLaunchParams.frame.size.y);
+        // printf("prev_x: %d, x: %d, prev_y: %d, y: %d\n", prev_x, ix, prev_y, iy);
+        if (prev_x >= 0 && prev_x < optixLaunchParams.frame.size.x && prev_y >= 0 && prev_y < optixLaunchParams.frame.size.y) {
+          prev_fbIndex = prev_x + prev_y * optixLaunchParams.frame.size.x;
+          if (optixLaunchParams.frame.prev_idBuffer[prev_fbIndex] == sbtData.id) {
+            prev_reservoir_index = prev_fbIndex * restir.config.num_eveluated_samples;
+          }
+        }
+      }
+      // printf("x: %d, y: %d\n", ix, iy);
+      for (uint8_t i = 0; i < restir.config.num_eveluated_samples; ++i) {
+        Reservoir reservoir = Reservoir::New();
+        for (uint16_t j = 0; j < restir.config.num_initial_samples; ++j) {
+          ReservoirSample sample;
+          float sample_pdf;
+          SampleLight(prd.random, sample.position, sample.normal, sample.color, sample_pdf);
+          sample.shade = Shade(normalize(sample.position - surfPos), Ns, sample.normal, sbtData.color, sample.color, length(sample.position - surfPos));
+          sample.p_hat = Luminance(sample.shade);
+          // if (sample.p_hat > 0.f) {
+          //   printf("p_hat: %f\n", sample.p_hat);
+          // }
+          if (reservoir.Update(sample, sample.p_hat / max(sample_pdf, 0.001f), prd.random)) {
+            // printf("reservoir updated\n");
+          }
+        }
+
+        if (restir.config.visibility_reuse) {
+          bool visibility = false;
+          const vec3f light_vec = reservoir.sample.position - optixLaunchParams.frame.posBuffer[fbIndex];
+          const float light_dist = length(light_vec);
+          const vec3f light_dir = light_vec / light_dist;
+          uint32_t u0, u1;
+          packPointer( &visibility, u0, u1 );
+          optixTrace(optixLaunchParams.traversable,
+                    optixLaunchParams.frame.posBuffer[fbIndex],
+                    light_dir,
+                    0.001f,    // tmin
+                    light_dist * (1.f - 1e-3f),  // tmax
+                    0.0f,      // rayTime
+                    OptixVisibilityMask( 255 ),
+                    OPTIX_RAY_FLAG_DISABLE_ANYHIT
+                    | OPTIX_RAY_FLAG_DISABLE_CLOSESTHIT
+                    | OPTIX_RAY_FLAG_TERMINATE_ON_FIRST_HIT,
+                    1,         // SBT offset
+                    2,         // SBT stride
+                    1,         // missSBTIndex 
+                    u0, u1 );
+          if (!visibility) {
+            reservoir.w = 0.f;
+            reservoir.w_sum = 0.f;
+          }
+        }
+
+        if (prev_reservoir_index >= 0) {
+          if (optixLaunchParams.frame.prev_mask[prev_fbIndex]) {
+            const uint32_t prev_reservoir_index = prev_fbIndex * restir.config.num_eveluated_samples;
+            const Reservoir &prev_reservoir = restir.prev_reservoirs[prev_reservoir_index + i];
+            const uint32_t bounded_num_samples = min(prev_reservoir.num_samples, 20 * reservoir.num_samples);
+            const float weight = prev_reservoir.sample.p_hat * prev_reservoir.w * bounded_num_samples;
+            reservoir.Update(prev_reservoir.sample, weight, prd.random, bounded_num_samples);
+          }
+        }
+
+        // if (reservoir.num_samples != 0) {
+        //   printf("reservoir.num_samples: %d\n", reservoir.num_samples);
+        // }
+
+        reservoir.CalcW();
+        restir.reservoirs[reservoir_index + i] = reservoir;
+      }
+      
     }
-    prd.pixelColor = pixelColor;
   }
   
   extern "C" __global__ void __closesthit__shadow()
@@ -264,14 +322,17 @@ namespace osc {
   {
     PRD &prd = *getPRD<PRD>();
     // set to constant white as background color
-    prd.pixelColor = vec3f(1.f);
+    prd.pixelColor = vec3f(0.f);
+    // printf("miss\n");
   }
 
   extern "C" __global__ void __miss__shadow()
   {
     // we didn't hit anything, so the light is visible
-    vec3f &prd = *(vec3f*)getPRD<vec3f>();
-    prd = vec3f(1.f);
+    // vec3f &prd = *(vec3f*)getPRD<vec3f>();
+    // prd = vec3f(1.f);
+    bool &visibility = *(bool*)getPRD<bool>();
+    visibility = true;
   }
 
   //------------------------------------------------------------------------------
@@ -323,22 +384,22 @@ namespace osc {
                  RAY_TYPE_COUNT,               // SBT stride
                  RADIANCE_RAY_TYPE,            // missSBTIndex 
                  u0, u1 );
-      pixelColor += prd.pixelColor;
+      // pixelColor += prd.pixelColor;
     }
     
-    const int r = int(255.99f*min(pixelColor.x / numPixelSamples,1.f));
-    const int g = int(255.99f*min(pixelColor.y / numPixelSamples,1.f));
-    const int b = int(255.99f*min(pixelColor.z / numPixelSamples,1.f));
+  //   const int r = 0;
+  //   const int g = 0;
+  //   const int b = 0;
 
 
-    // convert to 32-bit rgba value (we explicitly set alpha to 0xff
-    // to make stb_image_write happy ...
-    const uint32_t rgba = 0xff000000
-      | (r<<0) | (g<<8) | (b<<16);
+  // //   // convert to 32-bit rgba value (we explicitly set alpha to 0xff
+  // //   // to make stb_image_write happy ...
+  //   const uint32_t rgba = 0xff000000
+  //     | (r<<0) | (g<<8) | (b<<16);
 
-    // and write to frame buffer ...
-    const uint32_t fbIndex = ix+iy*optixLaunchParams.frame.size.x;
-    optixLaunchParams.frame.colorBuffer[fbIndex] = rgba;
+  // //   // and write to frame buffer ...
+  //   const uint32_t fbIndex = ix+iy*optixLaunchParams.frame.size.x;
+  //   optixLaunchParams.frame.colorBuffer[fbIndex] = rgba;
   }
   
 } // ::osc

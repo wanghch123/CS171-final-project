@@ -31,10 +31,11 @@ namespace osc {
     vec3f *normal;
     vec3i *index;
     bool isEmissive;
+    int id;
   };
 
   struct ReSTIR_conig {
-    uint8_t num_initial_samples;
+    uint16_t num_initial_samples;
     uint8_t num_eveluated_samples;
     uint8_t num_spatial_samples;
     uint8_t spatial_radius;
@@ -49,6 +50,13 @@ namespace osc {
   {
     struct {
       uint32_t *colorBuffer;
+      bool *prev_mask;
+      bool *mask;
+      vec3f *posBuffer;
+      vec3f *normalBuffer;
+      vec3f *diffuseBuffer;
+      int *idBuffer;
+      int *prev_idBuffer;
       vec2i     size;
       int       accumID { 0 };
     } frame;
@@ -59,6 +67,13 @@ namespace osc {
       vec3f horizontal;
       vec3f vertical;
     } camera;
+
+    struct {
+      vec3f position;
+      vec3f direction;
+      vec3f horizontal;
+      vec3f vertical;
+    } prev_camera;
 
     struct {
       vec3f *positions;

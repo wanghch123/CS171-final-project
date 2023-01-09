@@ -22,7 +22,8 @@
 namespace osc {
 
   extern "C" char embedded_ptx_code[];
-  extern "C" char sample_ptx_code[];
+  extern "C" char light_ptx_code[];
+  extern "C" char spatial_ptx_code[];
 
   /*! SBT record for a raygen program */
   struct __align__( OPTIX_SBT_RECORD_ALIGNMENT ) RaygenRecord
@@ -47,6 +48,12 @@ namespace osc {
   {
     __align__( OPTIX_SBT_RECORD_ALIGNMENT ) char header[OPTIX_SBT_RECORD_HEADER_SIZE];
     TriangleMeshSBTData data;
+  };
+
+  struct __align__( OPTIX_SBT_RECORD_ALIGNMENT ) HitgroupRecord_light
+  {
+    __align__( OPTIX_SBT_RECORD_ALIGNMENT ) char header[OPTIX_SBT_RECORD_HEADER_SIZE];
+    void *data;
   };
 
 
@@ -105,17 +112,6 @@ namespace osc {
     // std::cout << "#osc: creating hitgroup programs ..." << std::endl;
     // createHitgroupPrograms();
 
-    // OptixProgramConfig samlpe_programConfig;
-    // samlpe_programConfig.ptxCode = sample_ptx_code;
-    // samlpe_programConfig.launch_params = "optixLaunchParams";
-    // samlpe_programConfig.max_trace_depth = 2;
-    // samlpe_programConfig.raygen = "__raygen__sample";
-    // samlpe_programConfig.miss = {"__miss__shadow"};
-    // samlpe_programConfig.closesthit = {"__closesthit__empty"};
-    // samlpe_programConfig.anyhit = {"__anyhit__empty"};
-
-    // sample_program = std::make_unique<OptixProgram>(samlpe_programConfig, optixContext);
-
     OptixProgramConfig programConfig;
     programConfig.ptxCode = embedded_ptx_code;
     programConfig.launch_params = "optixLaunchParams";
@@ -127,17 +123,39 @@ namespace osc {
     
     program = std::make_unique<OptixProgram>(programConfig, optixContext);
 
+    OptixProgramConfig spatial_programConfig;
+    spatial_programConfig.ptxCode = spatial_ptx_code;
+    spatial_programConfig.launch_params = "optixLaunchParams";
+    spatial_programConfig.max_trace_depth = 2;
+    spatial_programConfig.raygen = "__raygen__spatial";
+    spatial_programConfig.miss = {"__miss__shadow"};
+    spatial_programConfig.closesthit = {"__closesthit__empty"};
+    spatial_programConfig.anyhit = {"__anyhit__empty"};
+
+    spatial_program = std::make_unique<OptixProgram>(spatial_programConfig, optixContext);
+
+    OptixProgramConfig light_programConfig;
+    light_programConfig.ptxCode = light_ptx_code;
+    light_programConfig.launch_params = "optixLaunchParams";
+    light_programConfig.max_trace_depth = 2;
+    light_programConfig.raygen = "__raygen__lighting";
+    light_programConfig.miss = {"__miss__shadow"};
+    light_programConfig.closesthit = {"__closesthit__empty"};
+    light_programConfig.anyhit = {"__anyhit__empty"};
+
+    light_program = std::make_unique<OptixProgram>(light_programConfig, optixContext);
+
     launchParams.traversable = buildAccel();
 
     restir_config_.num_initial_samples = 32;
-    restir_config_.num_eveluated_samples = 8;
+    restir_config_.num_eveluated_samples = 1;
     restir_config_.num_spatial_samples = 5;
-    restir_config_.num_spatial_reuse_pass = 2;
+    restir_config_.num_spatial_reuse_pass = 1;
     restir_config_.spatial_radius = 30;
-    restir_config_.visibility_reuse = false;
-    restir_config_.temporal_reuse = false;
-    restir_config_.unbiased = false;
-    restir_config_.mis_spatial_reuse = false;
+    restir_config_.visibility_reuse = true;
+    restir_config_.temporal_reuse = true;
+    restir_config_.unbiased = true;
+    restir_config_.mis_spatial_reuse = false;           // TODO: implement 
     launchParams.restir.config = restir_config_;
 
     const size_t reserviors_buffer_size = sizeof(Reservoir) * restir_config_.num_eveluated_samples * 1200 * 800;
@@ -149,6 +167,8 @@ namespace osc {
 
     std::cout << "#osc: building SBT ..." << std::endl;
     buildSBT();
+    buildSBT_lighting();
+    buildSBT_spatial();
 
     launchParamsBuffer.alloc(sizeof(launchParams));
     std::cout << "#osc: context, module, pipeline, etc, all set up ..." << std::endl;
@@ -602,6 +622,7 @@ namespace osc {
         rec.data.index    = (vec3i*)indexBuffer[meshID].d_pointer();
         rec.data.vertex   = (vec3f*)vertexBuffer[meshID].d_pointer();
         rec.data.normal   = (vec3f*)normalBuffer[meshID].d_pointer();
+        rec.data.id       = meshID;
         hitgroupRecords.push_back(rec);
       }
     }
@@ -611,7 +632,85 @@ namespace osc {
     sbt.hitgroupRecordCount         = (int)hitgroupRecords.size();
   }
 
+  void SampleRenderer::buildSBT_lighting()
+  {
+    std::vector<RaygenRecord> raygenRecords;
 
+    RaygenRecord rec;
+    OPTIX_CHECK(optixSbtRecordPackHeader(light_program->RaygenProgram(),&rec));
+    rec.data = nullptr; /* for now ... */
+    raygenRecords.push_back(rec);
+
+    raygenRecordsBuffer_lighting.alloc_and_upload(raygenRecords);
+    sbt_lighting.raygenRecord = raygenRecordsBuffer_lighting.d_pointer();
+
+    std::vector<MissRecord> missRecords;
+    for (int i=0;i<light_program->MissPrograms().size();i++) {
+      MissRecord rec;
+      OPTIX_CHECK(optixSbtRecordPackHeader(light_program->MissPrograms()[i],&rec));
+      rec.data = nullptr; /* for now ... */
+      missRecords.push_back(rec);
+    }
+    missRecordsBuffer_lighting.alloc_and_upload(missRecords);
+    sbt_lighting.missRecordBase          = missRecordsBuffer_lighting.d_pointer();
+    sbt_lighting.missRecordStrideInBytes = sizeof(MissRecord);
+    sbt_lighting.missRecordCount         = (int)missRecords.size();
+
+    int numObjects = (int)model->meshes.size();
+    std::vector<HitgroupRecord_light> hitgroupRecords;
+    for (int meshID=0;meshID<numObjects;meshID++) {
+      for (int i = 0; i < light_program->HitgroupPrograms().size(); i++) {
+        HitgroupRecord_light rec;
+        OPTIX_CHECK(optixSbtRecordPackHeader(light_program->HitgroupPrograms()[i],&rec));
+        rec.data = nullptr;
+        hitgroupRecords.push_back(rec);
+      }
+    }
+    hitgroupRecordsBuffer_lighting.alloc_and_upload(hitgroupRecords);
+    sbt_lighting.hitgroupRecordBase          = hitgroupRecordsBuffer_lighting.d_pointer();
+    sbt_lighting.hitgroupRecordStrideInBytes = sizeof(HitgroupRecord_light);
+    sbt_lighting.hitgroupRecordCount         = (int)hitgroupRecords.size();
+  }
+
+  void SampleRenderer::buildSBT_spatial()
+  {
+    std::vector<RaygenRecord> raygenRecords;
+
+    RaygenRecord rec;
+    OPTIX_CHECK(optixSbtRecordPackHeader(spatial_program->RaygenProgram(),&rec));
+    rec.data = nullptr; /* for now ... */
+    raygenRecords.push_back(rec);
+
+    raygenRecordsBuffer_spatial.alloc_and_upload(raygenRecords);
+    sbt_spatial.raygenRecord = raygenRecordsBuffer_spatial.d_pointer();
+
+    std::vector<MissRecord> missRecords;
+    for (int i=0;i<spatial_program->MissPrograms().size();i++) {
+      MissRecord rec;
+      OPTIX_CHECK(optixSbtRecordPackHeader(spatial_program->MissPrograms()[i],&rec));
+      rec.data = nullptr; /* for now ... */
+      missRecords.push_back(rec);
+    }
+    missRecordsBuffer_spatial.alloc_and_upload(missRecords);
+    sbt_spatial.missRecordBase          = missRecordsBuffer_spatial.d_pointer();
+    sbt_spatial.missRecordStrideInBytes = sizeof(MissRecord);
+    sbt_spatial.missRecordCount         = (int)missRecords.size();
+
+    int numObjects = (int)model->meshes.size();
+    std::vector<HitgroupRecord_light> hitgroupRecords;
+    for (int meshID=0;meshID<numObjects;meshID++) {
+      for (int i = 0; i < spatial_program->HitgroupPrograms().size(); i++) {
+        HitgroupRecord_light rec;
+        OPTIX_CHECK(optixSbtRecordPackHeader(spatial_program->HitgroupPrograms()[i],&rec));
+        rec.data = nullptr;
+        hitgroupRecords.push_back(rec);
+      }
+    }
+    hitgroupRecordsBuffer_spatial.alloc_and_upload(hitgroupRecords);
+    sbt_spatial.hitgroupRecordBase          = hitgroupRecordsBuffer_spatial.d_pointer();
+    sbt_spatial.hitgroupRecordStrideInBytes = sizeof(HitgroupRecord_light);
+    sbt_spatial.hitgroupRecordCount         = (int)hitgroupRecords.size();
+  }
 
   /*! render one frame */
   void SampleRenderer::render()
@@ -619,9 +718,30 @@ namespace osc {
     // sanity check: make sure we launch only after first resize is
     // already done:
     if (launchParams.frame.size.x == 0) return;
+
+    launchParams.restir.reservoirs = (Reservoir *)reservoirs_buffer_[reservoirs_buffer_curr_index_].d_pointer();
+    if (reservoirs_buffer_prev_valid_) {
+      launchParams.restir.prev_reservoirs = (Reservoir *)reservoirs_buffer_[reservoirs_buffer_curr_index_ ^ 1].d_pointer();
+    } else {
+      launchParams.restir.prev_reservoirs = nullptr;
+      reservoirs_buffer_prev_valid_ = true;
+    }
+
+    launchParams.frame.mask = (bool*)maskBuffer[maskBuffer_curr_index_].d_pointer();
+    launchParams.frame.idBuffer = (int*)idBuffer[idBuffer_curr_index_].d_pointer();
+    if (maskBuffer_prev_valid_) {
+      launchParams.frame.prev_mask = (bool*)maskBuffer[maskBuffer_curr_index_ ^ 1].d_pointer();
+      launchParams.frame.prev_idBuffer = (int*)idBuffer[idBuffer_curr_index_ ^ 1].d_pointer();
+    } else {
+      launchParams.frame.prev_mask = nullptr;
+      maskBuffer_prev_valid_ = true;
+    }
+
+    reservoirs_buffer_curr_index_ ^= 1;
+    maskBuffer_curr_index_ ^= 1;
+    idBuffer_curr_index_ ^= 1;
       
     launchParamsBuffer.upload(&launchParams,1);
-    launchParams.frame.accumID++;
     
     OPTIX_CHECK(optixLaunch(/*! pipeline we're launching launch: */
                             program->Pipeline(),stream,
@@ -639,12 +759,69 @@ namespace osc {
     // want to use streams and double-buffering, but for this simple
     // example, this will have to do)
     CUDA_SYNC_CHECK();
+
+    for (uint8_t i = 0; i < restir_config_.num_spatial_reuse_pass; i++) {
+      launchParams.restir.reservoirs = (Reservoir *)reservoirs_buffer_[reservoirs_buffer_curr_index_].d_pointer();
+      launchParams.restir.prev_reservoirs = (Reservoir *)reservoirs_buffer_[reservoirs_buffer_curr_index_ ^ 1].d_pointer();
+      reservoirs_buffer_curr_index_ ^= 1;
+
+      launchParamsBuffer.upload(&launchParams,1);
+
+      OPTIX_CHECK(optixLaunch(/*! pipeline we're launching launch: */
+                              spatial_program->Pipeline(),stream,
+                              /*! parameters and SBT */
+                              launchParamsBuffer.d_pointer(),
+                              launchParamsBuffer.sizeInBytes,
+                              &sbt_spatial,
+                              /*! dimensions of the launch: */
+                              launchParams.frame.size.x,
+                              launchParams.frame.size.y,
+                              1
+                              ));
+      CUDA_SYNC_CHECK();
+    }
+
+    launchParamsBuffer.upload(&launchParams,1);
+
+    OPTIX_CHECK(optixLaunch(/*! pipeline we're launching launch: */
+                            light_program->Pipeline(),stream,
+                            /*! parameters and SBT */
+                            launchParamsBuffer.d_pointer(),
+                            launchParamsBuffer.sizeInBytes,
+                            &sbt_lighting,
+                            /*! dimensions of the launch: */
+                            launchParams.frame.size.x,
+                            launchParams.frame.size.y,
+                            1
+                            ));
+    CUDA_SYNC_CHECK();
+
+    launchParams.frame.accumID++;
   }
 
   /*! set camera to render with */
   void SampleRenderer::setCamera(const Camera &camera)
   {
     lastSetCamera = camera;
+    if (reservoirs_buffer_prev_valid_) {
+      launchParams.prev_camera.position  = launchParams.camera.position;
+      launchParams.prev_camera.direction = launchParams.camera.direction;
+      launchParams.prev_camera.horizontal = launchParams.camera.horizontal;
+      launchParams.prev_camera.vertical = launchParams.camera.vertical;
+    }
+    else {
+      launchParams.prev_camera.position  = camera.from;
+      launchParams.prev_camera.direction = normalize(camera.at-camera.from);
+      const float cosFovy = 0.66f;
+      const float aspect = launchParams.frame.size.x / float(launchParams.frame.size.y);
+      launchParams.prev_camera.horizontal
+        = cosFovy * aspect * normalize(cross(launchParams.prev_camera.direction,
+                                             camera.up));
+      launchParams.prev_camera.vertical
+        = cosFovy * normalize(cross(launchParams.prev_camera.horizontal,
+                                    launchParams.prev_camera.direction));
+    }
+    // reservoirs_buffer_prev_valid_ = false;
     launchParams.camera.position  = camera.from;
     launchParams.camera.direction = normalize(camera.at-camera.from);
     const float cosFovy = 0.66f;
@@ -657,6 +834,15 @@ namespace osc {
                                   launchParams.camera.direction));
   }
   
+  void SampleRenderer::updateCamera() {
+    if (reservoirs_buffer_prev_valid_) {
+      launchParams.prev_camera.position  = launchParams.camera.position;
+      launchParams.prev_camera.direction = launchParams.camera.direction;
+      launchParams.prev_camera.horizontal = launchParams.camera.horizontal;
+      launchParams.prev_camera.vertical = launchParams.camera.vertical;
+    }
+  }
+
   /*! resize frame buffer to given resolution */
   void SampleRenderer::resize(const vec2i &newSize)
   {
@@ -665,11 +851,27 @@ namespace osc {
     
     // resize our cuda frame buffer
     colorBuffer.resize(newSize.x*newSize.y*sizeof(uint32_t));
+    maskBuffer[0].resize(newSize.x*newSize.y*sizeof(bool));
+    maskBuffer[1].resize(newSize.x*newSize.y*sizeof(bool));
+    posBuffer.resize(newSize.x*newSize.y*sizeof(vec3f));
+    norBuffer.resize(newSize.x*newSize.y*sizeof(vec3f));
+    diffuseBuffer.resize(newSize.x*newSize.y*sizeof(vec3f));
+
+    idBuffer[0].resize(newSize.x*newSize.y*sizeof(int));
+    idBuffer[1].resize(newSize.x*newSize.y*sizeof(int));
 
     // update the launch parameters that we'll pass to the optix
     // launch:
     launchParams.frame.size  = newSize;
     launchParams.frame.colorBuffer = (uint32_t*)colorBuffer.d_pointer();
+    launchParams.frame.mask = (bool*)maskBuffer[maskBuffer_curr_index_].d_pointer();
+    launchParams.frame.prev_mask = (bool*)maskBuffer[maskBuffer_curr_index_ ^ 1].d_pointer();
+    launchParams.frame.idBuffer = (int*)idBuffer[idBuffer_curr_index_].d_pointer();
+    launchParams.frame.prev_idBuffer = (int*)idBuffer[idBuffer_curr_index_ ^ 1].d_pointer();
+    // maskBuffer_prev_valid_ = false;
+    launchParams.frame.posBuffer = (vec3f*)posBuffer.d_pointer();
+    launchParams.frame.normalBuffer = (vec3f*)norBuffer.d_pointer();
+    launchParams.frame.diffuseBuffer = (vec3f*)diffuseBuffer.d_pointer();
 
     const size_t reserviors_buffer_size = sizeof(Reservoir) * restir_config_.num_eveluated_samples * newSize.x * newSize.y;
     reservoirs_buffer_[0].resize(reserviors_buffer_size);

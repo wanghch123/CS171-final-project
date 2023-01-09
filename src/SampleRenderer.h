@@ -59,6 +59,8 @@ namespace osc {
 
     /*! set camera to render with */
     void setCamera(const Camera &camera);
+
+    void updateCamera();
   protected:
     // ------------------------------------------------------------------
     // internal helper functions
@@ -74,22 +76,24 @@ namespace osc {
     /*! creates the module that contains all the programs we are going
       to use. in this simple example, we use a single module from a
       single .cu file, using a single embedded ptx string */
-    void createModule();
+    // void createModule();
     
     /*! does all setup for the raygen program(s) we are going to use */
-    void createRaygenPrograms();
+    // void createRaygenPrograms();
     
     /*! does all setup for the miss program(s) we are going to use */
-    void createMissPrograms();
+    // void createMissPrograms();
     
     /*! does all setup for the hitgroup program(s) we are going to use */
-    void createHitgroupPrograms();
+    // void createHitgroupPrograms();
 
     /*! assembles the full pipeline of all programs */
-    void createPipeline();
+    // void createPipeline();
 
     /*! constructs the shader binding table */
     void buildSBT();
+    void buildSBT_lighting();
+    void buildSBT_spatial();
 
     /*! build an acceleration structure for the given triangle mesh */
     OptixTraversableHandle buildAccel();
@@ -106,7 +110,8 @@ namespace osc {
     OptixDeviceContext optixContext;
 
     std::unique_ptr<OptixProgram> program;
-    std::unique_ptr<OptixProgram> sample_program;
+    std::unique_ptr<OptixProgram> light_program;
+    std::unique_ptr<OptixProgram> spatial_program;
 
     /*! @{ the pipeline we're building */
     // OptixPipeline               pipeline;
@@ -121,7 +126,7 @@ namespace osc {
     /* @} */
     ReSTIR_conig restir_config_;
     bool reservoirs_buffer_prev_valid_ = false;
-    size_t reservoirs_buffer_curr_index_;
+    size_t reservoirs_buffer_curr_index_ = 0;
     CUDABuffer reservoirs_buffer_[2];
 
     /*! vector of all our program(group)s, and the SBT built around
@@ -134,6 +139,16 @@ namespace osc {
     CUDABuffer hitgroupRecordsBuffer;
     OptixShaderBindingTable sbt = {};
 
+    CUDABuffer raygenRecordsBuffer_lighting;
+    CUDABuffer missRecordsBuffer_lighting;
+    CUDABuffer hitgroupRecordsBuffer_lighting;
+    OptixShaderBindingTable sbt_lighting = {};
+
+    CUDABuffer raygenRecordsBuffer_spatial;
+    CUDABuffer missRecordsBuffer_spatial;
+    CUDABuffer hitgroupRecordsBuffer_spatial;
+    OptixShaderBindingTable sbt_spatial = {};
+
     /*! @{ our launch parameters, on the host, and the buffer to store
         them on the device */
     LaunchParams launchParams;
@@ -141,6 +156,17 @@ namespace osc {
     /*! @} */
 
     CUDABuffer colorBuffer;
+    CUDABuffer maskBuffer[2];
+
+    bool maskBuffer_prev_valid_ = false;
+    size_t maskBuffer_curr_index_ = 0;
+
+    CUDABuffer posBuffer;
+    CUDABuffer norBuffer;
+    CUDABuffer diffuseBuffer;
+
+    CUDABuffer idBuffer[2];
+    size_t idBuffer_curr_index_ = 0;
 
     CUDABuffer lightposBuffer;
     CUDABuffer lightcolorBuffer;

@@ -8,12 +8,14 @@ namespace osc {
         gdt::vec3f position;
         gdt::vec3f normal;
         gdt::vec3f color;
-        float p_hat;
+        gdt::vec3f shade;
+        float p_hat = 0.f;
     };
     struct Reservoir {
         ReservoirSample sample;
         float w_sum;
         uint32_t num_samples;
+        float w;
 
 #ifdef __CUDACC__
         __device__
@@ -34,21 +36,28 @@ namespace osc {
 #ifdef __CUDACC__
         __device__
 #endif
-        bool Update(const ReservoirSample &sample, float weight, gdt::LCG<16> random) {
-            if (num_samples < 1) {
-                this->sample = sample;
-                w_sum = weight;
-                num_samples = 1;
-                return true;
-            }
-            num_samples++;
+        bool Update(const ReservoirSample &sample, float weight, gdt::LCG<16> random, uint32_t num_new_samples = 1) {
+            num_samples += num_new_samples;
             w_sum += weight;
-            float p = weight / w_sum;
+            float p = weight / fmax(w_sum, 0.001f);
             if (random() < p) {
                 this->sample = sample;
                 return true;
             }
             return false;
         }
+
+#ifdef __CUDACC__
+    __device__
+#endif
+        void CalcW() {
+            w = w_sum / fmax(sample.p_hat * num_samples, 0.001f);
+            // if (isnan(w)) {
+            //     if (isnan(w_sum)) {
+            //         printf("Fuck!!!!!!\n");
+            //     }
+            // }
+        }
+
     };
 }

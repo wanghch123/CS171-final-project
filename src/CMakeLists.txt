@@ -18,12 +18,14 @@ find_package(OpenGL REQUIRED)
 
 include_directories(${OptiX_INCLUDE})
 
-cuda_compile_and_embed(embedded_ptx_code sample.cu)
-cuda_compile_and_embed(sample_ptx_code sample_2.cu)
+cuda_compile_and_embed(embedded_ptx_code init_pass.cu)
+cuda_compile_and_embed(light_ptx_code render_pass.cu)
+cuda_compile_and_embed(spatial_ptx_code spatial_reuse_pass.cu)
 
 add_executable(ex07_firstRealModel
   ${embedded_ptx_code}
-  ${sample_ptx_code}
+  ${light_ptx_code}
+  ${spatial_ptx_code}
   optix7.h
   CUDABuffer.h
   LaunchParams.h
