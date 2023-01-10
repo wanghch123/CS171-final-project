@@ -59,10 +59,30 @@ namespace osc {
 
   /*! constructor - performs all setup, including initializing
     optix, creates module, pipeline, programs, SBT, etc. */
-  SampleRenderer::SampleRenderer(const Model *model)
+  SampleRenderer::SampleRenderer(Model *model)
     : model(model)
   {
     initOptix();
+
+    restir_config_.num_initial_samples = 32;
+    restir_config_.num_eveluated_samples = 4;
+    restir_config_.num_spatial_samples = 5;
+    restir_config_.num_spatial_reuse_pass = 2;
+    restir_config_.spatial_radius = 30;
+    restir_config_.visibility_reuse = true;
+    restir_config_.temporal_reuse = true;
+    restir_config_.unbiased = true;
+    restir_config_.mis_spatial_reuse = false;           // TODO: implement 
+    launchParams.restir.config = restir_config_;
+
+    // read light from model to cuda buffer
+
+    float scale = 1.0f;
+    
+    for (int i = 0; i < model->lights.positions.size(); ++i) {
+      model->lights.colors[i] *= scale;
+    }
+
     lightposBuffer.alloc_and_upload(model->lights.positions);
     lightcolorBuffer.alloc_and_upload(model->lights.colors);
     lightsizeBuffer.alloc_and_upload(model->lights.sizes);
@@ -146,17 +166,6 @@ namespace osc {
     light_program = std::make_unique<OptixProgram>(light_programConfig, optixContext);
 
     launchParams.traversable = buildAccel();
-
-    restir_config_.num_initial_samples = 32;
-    restir_config_.num_eveluated_samples = 1;
-    restir_config_.num_spatial_samples = 5;
-    restir_config_.num_spatial_reuse_pass = 1;
-    restir_config_.spatial_radius = 30;
-    restir_config_.visibility_reuse = true;
-    restir_config_.temporal_reuse = true;
-    restir_config_.unbiased = true;
-    restir_config_.mis_spatial_reuse = false;           // TODO: implement 
-    launchParams.restir.config = restir_config_;
 
     const size_t reserviors_buffer_size = sizeof(Reservoir) * restir_config_.num_eveluated_samples * 1200 * 800;
     reservoirs_buffer_[0].alloc(reserviors_buffer_size);

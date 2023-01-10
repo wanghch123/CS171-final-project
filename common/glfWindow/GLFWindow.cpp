@@ -15,6 +15,8 @@
 // ======================================================================== //
 
 #include "GLFWindow.h"
+#include "tictoc.hpp"
+#include "iostream"
 
 /*! \namespace osc - Optix Siggraph Course */
 namespace osc {
@@ -108,11 +110,13 @@ namespace osc {
     glfwSetCursorPosCallback(handle, glfwindow_mouseMotion_cb);
     
     while (!glfwWindowShouldClose(handle)) {
+      auto clock = gkxx::tic();
       render();
       draw();
         
       glfwSwapBuffers(handle);
       glfwPollEvents();
+      std::cout << (float)1000 / (float)std::chrono::duration_cast<std::chrono::milliseconds>(toc(clock)).count() << std::endl;
     }
   }
 

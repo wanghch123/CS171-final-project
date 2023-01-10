@@ -22,7 +22,7 @@ cuda_compile_and_embed(embedded_ptx_code init_pass.cu)
 cuda_compile_and_embed(light_ptx_code render_pass.cu)
 cuda_compile_and_embed(spatial_ptx_code spatial_reuse_pass.cu)
 
-add_executable(ex07_firstRealModel
+add_executable(restir
   ${embedded_ptx_code}
   ${light_ptx_code}
   ${spatial_ptx_code}
@@ -39,7 +39,7 @@ add_executable(ex07_firstRealModel
   optix_program.cpp
   )
 
-target_link_libraries(ex07_firstRealModel
+target_link_libraries(restir
   gdt
   # optix dependencies, for rendering
   ${optix_LIBRARY}

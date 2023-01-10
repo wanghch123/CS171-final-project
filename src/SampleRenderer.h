@@ -46,7 +46,7 @@ namespace osc {
   public:
     /*! constructor - performs all setup, including initializing
       optix, creates module, pipeline, programs, SBT, etc. */
-    SampleRenderer(const Model *model);
+    SampleRenderer(Model *model);
 
     /*! render one frame */
     void render();
@@ -178,7 +178,7 @@ namespace osc {
     Camera lastSetCamera;
     
     /*! the model we are going to trace rays against */
-    const Model *model;
+    Model *model;
     
 
     std::vector<CUDABuffer> vertexBuffer;

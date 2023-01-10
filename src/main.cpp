@@ -26,7 +26,7 @@ namespace osc {
   struct SampleWindow : public GLFCameraWindow
   {
     SampleWindow(const std::string &title,
-                 const Model *model,
+                 Model *model,
                  const Camera &camera,
                  const float worldScale)
       : GLFCameraWindow(title,camera.from,camera.at,camera.up,worldScale),
@@ -140,7 +140,7 @@ namespace osc {
       // camera knows how much to move for any given user interaction:
       const float worldScale = length(model->bounds.span());
 
-      SampleWindow *window = new SampleWindow("Optix 7 Course Example",
+      SampleWindow *window = new SampleWindow("ReSTIR",
                                               model,camera,worldScale);
       window->run();
       
